@@ -91,10 +91,10 @@ def pca_from_df(df: pd.DataFrame, cols: list, n_components: int = 2):
 #                  UI LAYOUT
 # ============================================
 
-st.set_page_config(page_title="Projet AIR – Météo", layout="wide")
+st.set_page_config(page_title="Projet météo", layout="wide")
 
 # -- TOP BAR / HEADER --
-st.title("🌤️ Projet AIR – Dashboard météo")
+st.title("🌤️ Projet dashboard météo")
 
 # Sidebar (navigation style like your sketch)
 with st.sidebar:
@@ -105,6 +105,7 @@ with st.sidebar:
             "Stat global",
             "Prévisions",
             "J vs N-1",
+            "Précipitations & Inondation",
             "ACP",
         ],
     )
@@ -116,7 +117,9 @@ with st.sidebar:
     today = date.today()
     start_dt = st.date_input("Début", value=today - timedelta(days=30))
     end_dt = st.date_input("Fin", value=today)
-    seuil_pluie = st.number_input("Seuil précipitations (mm)", value=10.0, step=0.5)
+    seuil_pluie = st.number_input("Seuil précipitations (mm, jour)", value=10.0, step=0.5)
+    seuil_pluie_3j = st.number_input("Seuil cumul 3 jours (mm)", value=30.0, step=1.0)
+    seuil_pluie_7j = st.number_input("Seuil cumul 7 jours (mm)", value=60.0, step=1.0)
     seuil_uv = st.number_input("Seuil ensoleillement (h)", value=8.0, step=0.5)
 
 # -- DATA FETCH (shared for pages that need it) --
@@ -234,23 +237,6 @@ elif page == "Prévisions":
                 st.line_chart(dfF_hr[hourly_cols].iloc[:48])  # 48h
             with st.expander("Données brutes (hourly)"):
                 st.dataframe(dfF_hr.reset_index().head(200), use_container_width=True)
-
-elif page == "Historique 3 ans":
-    st.subheader("Historique 3 ans – vue agrégée")
-    # Étendre la période automatiquement à 3 ans
-    start3 = (date.today() - timedelta(days=365*3)).strftime("%Y-%m-%d")
-    end3 = date.today().strftime("%Y-%m-%d")
-    j3 = fetch_daily(geoloc, start3, end3)
-    df3 = _json_daily_to_df(j3)
-    if "sunshine_duration" in df3.columns:
-        df3["sunshine_hours"] = df3["sunshine_duration"] / 3600.0
-    if not df3.empty:
-        st.line_chart(df3.set_index("time")[[
-            c for c in ["temperature_2m_mean","precipitation_sum","sunshine_hours"] if c in df3
-        ]])
-        st.dataframe(df3.tail(30), use_container_width=True)
-    else:
-        st.info("Aucune donnée disponible sur 3 ans pour cette zone.")
 
 elif page == "J vs N-1":
     st.subheader("Comparaison Aujourd'hui vs Année dernière")
@@ -378,28 +364,61 @@ elif page == "J vs N-1":
         else:
             st.info("✅ Aucune alerte météorologique pour aujourd'hui.")
 
-elif page == "Seuils & Alertes":
-    st.subheader("Surveillance par seuils")
-    if not df.empty:
-        a1, a2 = st.columns(2)
-        with a1:
-            st.markdown("**Alerte précipitations**")
-            if "precipitation_sum" in df:
-                exceed = df[df["precipitation_sum"] >= seuil_pluie]
-                st.write(f"Jours dépassant {seuil_pluie} mm: {len(exceed)}")
-                st.dataframe(exceed[["time", "precipitation_sum"]])
-            else:
-                st.info("Pas de données de précipitations.")
-        with a2:
-            st.markdown("**Alerte ensoleillement**")
-            if "sunshine_hours" in df:
-                under = df[df["sunshine_hours"] < seuil_uv]
-                st.write(f"Jours sous {seuil_uv} h: {len(under)}")
-                st.dataframe(under[["time", "sunshine_hours"]])
-            else:
-                st.info("Pas de données d'ensoleillement.")
+elif page == "Précipitations & Inondation":
+    st.subheader("Précipitations & alerte inondation (règles simples)")
+
+    if "precipitation_sum" not in df.columns or df.empty:
+        st.info("Pas de données de précipitations pour la période.")
     else:
-        st.info("Aucune donnée pour calculer les alertes.")
+        dfr = df.set_index("time").sort_index().copy()
+        # Cumul glissant 3 et 7 jours
+        dfr["rain_1d"] = dfr["precipitation_sum"].astype(float)
+        dfr["rain_3d"] = dfr["rain_1d"].rolling(window=3, min_periods=1).sum()
+        dfr["rain_7d"] = dfr["rain_1d"].rolling(window=7, min_periods=1).sum()
+
+        # KPIs rapides
+        cpa, cpb, cpc = st.columns(3)
+        with cpa:
+            st.metric("Dernier jour (mm)", f"{float(dfr['rain_1d'].iloc[-1]):.1f}", help="Précipitations du dernier jour de la période")
+        with cpb:
+            st.metric("Cumul 3 jours (mm)", f"{float(dfr['rain_3d'].iloc[-1]):.1f}")
+        with cpc:
+            st.metric("Cumul 7 jours (mm)", f"{float(dfr['rain_7d'].iloc[-1]):.1f}")
+
+        st.markdown("**Évolution des précipitations**")
+        st.area_chart(dfr[["rain_1d"]])
+
+        st.markdown("**Cumuls glissants (3j & 7j)**")
+        st.line_chart(dfr[["rain_3d", "rain_7d"]])
+
+        # Règles simples d'alerte inondation (proxy pluviométrique):
+        # - Alerte 1: un jour ≥ seuil_pluie
+        # - Alerte 2: cumul 3 jours ≥ seuil_pluie_3j
+        # - Alerte 3: cumul 7 jours ≥ seuil_pluie_7j
+        alert_day = dfr[dfr["rain_1d"] >= seuil_pluie]
+        alert_3d = dfr[dfr["rain_3d"] >= seuil_pluie_3j]
+        alert_7d = dfr[dfr["rain_7d"] >= seuil_pluie_7j]
+
+        st.markdown("### 🔔 Détection d'alertes (heuristiques)")
+        colA, colB, colC = st.columns(3)
+        with colA:
+            st.metric(f"Jours ≥ {seuil_pluie} mm", len(alert_day))
+        with colB:
+            st.metric(f"Cumul 3j ≥ {seuil_pluie_3j} mm", len(alert_3d))
+        with colC:
+            st.metric(f"Cumul 7j ≥ {seuil_pluie_7j} mm", len(alert_7d))
+
+        with st.expander("Voir les jours en alerte"):
+            tabs = st.tabs(["Jour", "Cumul 3j", "Cumul 7j"])
+            with tabs[0]:
+                st.dataframe(alert_day[["rain_1d"]].rename(columns={"rain_1d": "precipitation_sum"}))
+            with tabs[1]:
+                st.dataframe(alert_3d[["rain_3d"]])
+            with tabs[2]:
+                st.dataframe(alert_7d[["rain_7d"]])
+
+        st.info("Ces alertes sont **heuristiques** basées uniquement sur la pluie. Une alerte inondation réelle dépend aussi du débit des rivières, de la saturation des sols, du relief, etc.")
+
 
 elif page == "ACP":
     st.subheader("ACP – Analyse en composantes principales")
