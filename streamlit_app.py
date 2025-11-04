@@ -9,6 +9,7 @@ from DataCollecte.api_client import (
     get_daily_weather_data,
     get_forecast_today,
 )
+from main import get_today_vs_last_year
 
 # ============================================
 #              HELPER FUNCTIONS
@@ -103,9 +104,7 @@ with st.sidebar:
         [
             "Stat global",
             "Prévisions",
-            "Historique 3 ans",
-            "J vs J‑1",
-            "Seuils & Alertes",
+            "J vs N-1",
             "ACP",
         ],
     )
@@ -136,28 +135,29 @@ df = _json_daily_to_df(j)
 if "sunshine_duration" in df.columns:
     df["sunshine_hours"] = df["sunshine_duration"] / 3600.0
 
-# -- KPI BAR (always on top) --
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    t_mean = safe_mean(df, "temperature_2m_mean")
-    st.metric("Temp. moyenne (°C)", f"{t_mean:.1f}" if t_mean is not None else "–")
-with c2:
-    t_max = safe_mean(df, "temperature_2m_max")
-    st.metric("Temp. max moy. (°C)", f"{t_max:.1f}" if t_max is not None else "–")
-with c3:
-    p_sum = safe_sum(df, "precipitation_sum")
-    st.metric("Précipitations totales (mm)", f"{p_sum:.1f}" if p_sum is not None else "–")
-with c4:
-    sun_h = safe_sum(df, "sunshine_hours") if "sunshine_hours" in df else None
-    st.metric("Ensoleillement total (h)", f"{sun_h:.1f}" if sun_h is not None else "–")
-
-st.divider()
 
 # ============================================
 #                   PAGES
 # ============================================
 
 if page == "Stat global":
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        t_mean = safe_mean(df, "temperature_2m_mean")
+        st.metric("Temp. moyenne (°C)", f"{t_mean:.1f}" if t_mean is not None else "–")
+    with c2:
+        t_max = safe_mean(df, "temperature_2m_max")
+        st.metric("Temp. max moy. (°C)", f"{t_max:.1f}" if t_max is not None else "–")
+    with c3:
+        p_sum = safe_sum(df, "precipitation_sum")
+        st.metric("Précipitations totales (mm)", f"{p_sum:.1f}" if p_sum is not None else "–")
+    with c4:
+        sun_h = safe_sum(df, "sunshine_hours") if "sunshine_hours" in df else None
+        st.metric("Ensoleillement total (h)", f"{sun_h:.1f}" if sun_h is not None else "–")
+    
+    st.divider()
+
     st.subheader("Courbes principales")
 
     left, right = st.columns([2, 1])
@@ -252,20 +252,131 @@ elif page == "Historique 3 ans":
     else:
         st.info("Aucune donnée disponible sur 3 ans pour cette zone.")
 
-elif page == "J vs J‑1":
-    st.subheader("Comparaison J et J‑1")
-    if len(df) >= 2:
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
-        cc1, cc2, cc3 = st.columns(3)
-        if "temperature_2m_mean" in df:
-            cc1.metric("Temp. moyenne (°C)", f"{last['temperature_2m_mean']:.1f}", f"{(last['temperature_2m_mean']-prev['temperature_2m_mean']):+.1f}")
-        if "precipitation_sum" in df:
-            cc2.metric("Précipitations (mm)", f"{last['precipitation_sum']:.1f}", f"{(last['precipitation_sum']-prev['precipitation_sum']):+.1f}")
-        if "sunshine_hours" in df:
-            cc3.metric("Ensoleillement (h)", f"{last['sunshine_hours']:.1f}", f"{(last['sunshine_hours']-prev['sunshine_hours']):+.1f}")
+elif page == "J vs N-1":
+    st.subheader("Comparaison Aujourd'hui vs Année dernière")
+    
+    with st.spinner(f"Chargement des données pour {city}..."):
+        df_today, df_last_year = get_today_vs_last_year(city)
+    
+    if df_today is None or df_today.empty:
+        st.error("Impossible de récupérer les données d'aujourd'hui.")
+    elif df_last_year is None or df_last_year.empty:
+        st.warning("Données d'aujourd'hui disponibles, mais impossible de récupérer les données de l'année dernière.")
+        st.info("**Données d'aujourd'hui**")
+        st.dataframe(df_today, use_container_width=True)
     else:
-        st.info("Besoin d'au moins 2 jours de données dans la période sélectionnée.")
+        # Conversion sunshine en heures si nécessaire
+        if "sunshine_duration" in df_today.columns:
+            df_today["sunshine_hours"] = df_today["sunshine_duration"] / 3600.0
+        if "sunshine_duration" in df_last_year.columns:
+            df_last_year["sunshine_hours"] = df_last_year["sunshine_duration"] / 3600.0
+        
+        # Métriques comparatives
+        cc1, cc2, cc3, cc4 = st.columns(4)
+        
+        if "temperature_2m_mean" in df_today.columns and "temperature_2m_mean" in df_last_year.columns:
+            temp_today = float(df_today["temperature_2m_mean"].iloc[0])
+            temp_last_year = float(df_last_year["temperature_2m_mean"].iloc[0])
+            diff_temp = temp_today - temp_last_year
+            cc1.metric("Temp. moyenne (°C)", f"{temp_today:.1f}", f"{diff_temp:+.1f}°C vs N-1")
+        
+        if "temperature_2m_max" in df_today.columns and "temperature_2m_max" in df_last_year.columns:
+            tmax_today = float(df_today["temperature_2m_max"].iloc[0])
+            tmax_last_year = float(df_last_year["temperature_2m_max"].iloc[0])
+            diff_tmax = tmax_today - tmax_last_year
+            cc2.metric("Temp. max (°C)", f"{tmax_today:.1f}", f"{diff_tmax:+.1f}°C vs N-1")
+        
+        if "precipitation_sum" in df_today.columns and "precipitation_sum" in df_last_year.columns:
+            precip_today = float(df_today["precipitation_sum"].iloc[0])
+            precip_last_year = float(df_last_year["precipitation_sum"].iloc[0])
+            diff_precip = precip_today - precip_last_year
+            cc3.metric("Précipitations (mm)", f"{precip_today:.1f}", f"{diff_precip:+.1f} mm vs N-1")
+        
+        if "sunshine_hours" in df_today.columns and "sunshine_hours" in df_last_year.columns:
+            sun_today = float(df_today["sunshine_hours"].iloc[0])
+            sun_last_year = float(df_last_year["sunshine_hours"].iloc[0])
+            diff_sun = sun_today - sun_last_year
+            cc4.metric("Ensoleillement (h)", f"{sun_today:.1f}", f"{diff_sun:+.1f}h vs N-1")
+        
+        st.divider()
+        st.subheader("🚨 Alertes météorologiques")
+        
+        # Fonction pour afficher une alerte avec couleur et émoji
+        def show_alert(emoji, title, level, message, color):
+            if level:
+                st.markdown(f"""
+                <div style="padding: 15px; border-radius: 10px; background-color: {color}; margin-bottom: 10px;">
+                    <h4 style="margin: 0; color: #000;">{emoji} {title}</h4>
+                    <p style="margin: 5px 0 0 0; color: #000;"><strong>{level}:</strong> {message}</p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        alerts = []
+        
+        # 1. Alerte chaleur extrême
+        if "temperature_2m_max" in df_today.columns:
+            temp_max = float(df_today["temperature_2m_max"].iloc[0])
+            if temp_max >= 38:
+                alerts.append(("🌡️", "Alerte chaleur extrême", "Extrême", 
+                              "Alerte canicule : restez au frais, surveillez les personnes vulnérables.", "#ff4444"))
+            elif temp_max >= 35:
+                alerts.append(("🌡️", "Alerte chaleur extrême", "Élevé", 
+                              "Risque de coup de chaleur. Évitez les activités physiques.", "#ff9933"))
+            elif temp_max >= 30:
+                alerts.append(("🌡️", "Alerte chaleur extrême", "Modéré", 
+                              "Chaleur importante prévue aujourd'hui. Hydratez-vous.", "#ffdd44"))
+        
+        # 2. Alerte pluie intense / risque d'inondation locale
+        rain_24h = 0
+        if "rain_sum" in df_today.columns:
+            rain_24h = float(df_today["rain_sum"].iloc[0])
+        elif "precipitation_sum" in df_today.columns:
+            rain_24h = float(df_today["precipitation_sum"].iloc[0])
+        
+        if rain_24h > 80:
+            alerts.append(("🌧️", "Alerte pluie intense / risque d'inondation locale", "Extrême", 
+                          "Risque d'inondation localisée.", "#ff4444"))
+        elif rain_24h > 40:
+            alerts.append(("🌧️", "Alerte pluie intense / risque d'inondation locale", "Fort", 
+                          "Fortes pluies : vigilance sur les routes.", "#ff9933"))
+        elif rain_24h > 20:
+            alerts.append(("🌧️", "Alerte pluie intense / risque d'inondation locale", "Risque modéré", 
+                          "Pluies modérées attendues.", "#ffdd44"))
+        
+        # 3. Alerte vent violent
+        if "wind_gusts_10m_mean" in df_today.columns:
+            wind_gust = float(df_today["wind_gusts_10m_mean"].iloc[0]) * 3.6  # m/s to km/h
+            if wind_gust > 100:
+                alerts.append(("💨", "Alerte vent violent", "Violent", 
+                              "Risque de dégâts : évitez les déplacements.", "#ff4444"))
+            elif wind_gust > 70:
+                alerts.append(("💨", "Alerte vent violent", "Fort", 
+                              "Rafales fortes : attention aux objets légers.", "#ff9933"))
+        elif "wind_speed_10m_mean" in df_today.columns:
+            wind_speed = float(df_today["wind_speed_10m_mean"].iloc[0]) * 3.6  # m/s to km/h
+            if wind_speed > 40:
+                alerts.append(("💨", "Alerte vent violent", "Modéré", 
+                              "Vent soutenu prévu.", "#ffdd44"))
+        
+        # 4. Alerte froid / gel
+        if "temperature_2m_min" in df_today.columns:
+            temp_min = float(df_today["temperature_2m_min"].iloc[0])
+            if temp_min < -5:
+                alerts.append(("❄️", "Alerte froid / gel", "Froid intense", 
+                              "Grand froid : prudence à l'extérieur.", "#ff4444"))
+            elif temp_min < 0:
+                alerts.append(("❄️", "Alerte froid / gel", "Gel possible", 
+                              "Risque de gel : protégez les plantes et canalisations.", "#ff9933"))
+            elif temp_min < 5:
+                alerts.append(("❄️", "Alerte froid / gel", "Frais", 
+                              "Températures basses.", "#ffdd44"))
+        
+        # Afficher les alertes
+        if alerts:
+            for emoji, title, level, message, color in alerts:
+                show_alert(emoji, title, level, message, color)
+        else:
+            st.info("✅ Aucune alerte météorologique pour aujourd'hui.")
 
 elif page == "Seuils & Alertes":
     st.subheader("Surveillance par seuils")
@@ -350,5 +461,3 @@ elif page == "ACP":
                 load_df = pd.DataFrame(loadings, index=cols_sel, columns=[f"PC{i+1}" for i in range(loadings.shape[1])])
                 st.dataframe(load_df.style.format("{:.3f}"), use_container_width=True)
 
-# FOOTER
-st.caption("Données: Open‑Meteo | Cette interface correspond à votre wireframe: Stat global, Prévisions, Historique 3 ans, J vs J‑1, Seuils & Alertes, ACP.")

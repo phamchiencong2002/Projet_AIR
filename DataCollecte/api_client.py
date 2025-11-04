@@ -43,7 +43,7 @@ def get_forecast_today(geolocalisation):
         query_params = {
             "latitude": geolocalisation["latitude"], 
             "longitude": geolocalisation["longitude"], 
-            "daily": "precipitation_sum,sunshine_duration,shortwave_radiation_sum,wind_speed_10m_max,apparent_temperature_max,temperature_2m_min,temperature_2m_max,apparent_temperature_mean,temperature_2m_mean",
+            "daily": "precipitation_sum,sunshine_duration,apparent_temperature_max,temperature_2m_min,temperature_2m_max,apparent_temperature_mean,temperature_2m_mean,relative_humidity_2m_mean,uv_index_max,rain_sum,precipitation_probability_mean,wind_gusts_10m_mean,wind_speed_10m_mean",
             "forecast_days": 1
         }
         response = requests.get(FORECAST_API_URL, params=query_params)
